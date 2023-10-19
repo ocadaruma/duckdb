@@ -1,11 +1,11 @@
 name: LinuxRelease
 on:
   push:
-    branches: [master]
+    branches: [main]
     tags:
       - '*'
   pull_request:
-    branches: [master]
+    branches: [main]
 
 jobs:
  linux-release-64:
