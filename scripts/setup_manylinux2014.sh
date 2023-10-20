@@ -22,7 +22,6 @@ install_deps() {
     git config --global --add safe.directory '*'
     yum install -y curl zip unzip tar
     yum install -y ninja-build
-    yum install -y libasan libubsan
 
   elif [ "$1" = "aws-cli" ]; then
     curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
