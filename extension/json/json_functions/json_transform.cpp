@@ -1,6 +1,8 @@
 #include "json_transform.hpp"
 
 #include "duckdb/common/enum_util.hpp"
+#include "duckdb/common/serializer/deserializer.hpp"
+#include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/cast/cast_function_set.hpp"
@@ -8,8 +10,6 @@
 #include "duckdb/function/scalar/nested_functions.hpp"
 #include "json_functions.hpp"
 #include "json_scan.hpp"
-#include "duckdb/common/serializer/serializer.hpp"
-#include "duckdb/common/serializer/deserializer.hpp"
 
 namespace duckdb {
 
@@ -72,12 +72,13 @@ static unique_ptr<FunctionData> JSONTransformBind(ClientContext &context, Scalar
 	if (arguments[1]->HasParameter()) {
 		throw ParameterNotResolvedException();
 	}
-	if (arguments[1]->return_type == LogicalTypeId::SQLNULL) {
-		bound_function.return_type = LogicalTypeId::SQLNULL;
-	} else if (!arguments[1]->IsFoldable()) {
+	if (!arguments[1]->IsFoldable()) {
 		throw BinderException("JSON structure must be a constant!");
+	}
+	auto structure_val = ExpressionExecutor::EvaluateScalar(context, *arguments[1]);
+	if (structure_val.IsNull() || arguments[1]->return_type == LogicalTypeId::SQLNULL) {
+		bound_function.return_type = LogicalTypeId::SQLNULL;
 	} else {
-		auto structure_val = ExpressionExecutor::EvaluateScalar(context, *arguments[1]);
 		if (!structure_val.DefaultTryCastAs(JSONCommon::JSONType())) {
 			throw BinderException("Cannot cast JSON structure to string");
 		}
@@ -741,6 +742,7 @@ bool JSONTransform::Transform(yyjson_val *vals[], yyjson_alc *alc, Vector &resul
 
 	switch (result_type.id()) {
 	case LogicalTypeId::SQLNULL:
+		FlatVector::Validity(result).SetAllInvalid(count);
 		return true;
 	case LogicalTypeId::BOOLEAN:
 		return TransformNumerical<bool>(vals, result, count, options);
@@ -896,20 +898,32 @@ BoundCastInfo JSONToAnyCastBind(BindCastInput &input, const LogicalType &source,
 }
 
 void JSONFunctions::RegisterJSONTransformCastFunctions(CastFunctionSet &casts) {
-	auto json_to_any_cost = casts.ImplicitCastCost(JSONCommon::JSONType(), LogicalType::ANY);
-	casts.RegisterCastFunction(JSONCommon::JSONType(), LogicalType::ANY, JSONToAnyCastBind, json_to_any_cost);
-
-	const auto struct_type = LogicalType::STRUCT({{"any", LogicalType::ANY}});
-	auto json_to_struct_cost = casts.ImplicitCastCost(LogicalType::VARCHAR, struct_type) - 2;
-	casts.RegisterCastFunction(JSONCommon::JSONType(), struct_type, JSONToAnyCastBind, json_to_struct_cost);
-
-	const auto list_type = LogicalType::LIST(LogicalType::ANY);
-	auto json_to_list_cost = casts.ImplicitCastCost(LogicalType::VARCHAR, list_type) - 2;
-	casts.RegisterCastFunction(JSONCommon::JSONType(), list_type, JSONToAnyCastBind, json_to_list_cost);
-
-	const auto map_type = LogicalType::MAP(LogicalType::ANY, LogicalType::ANY);
-	auto json_to_map_cost = casts.ImplicitCastCost(LogicalType::VARCHAR, map_type) - 2;
-	casts.RegisterCastFunction(JSONCommon::JSONType(), map_type, JSONToAnyCastBind, json_to_map_cost);
+	// JSON can be cast to anything
+	for (const auto &type : LogicalType::AllTypes()) {
+		LogicalType target_type;
+		switch (type.id()) {
+		case LogicalTypeId::STRUCT:
+			target_type = LogicalType::STRUCT({{"any", LogicalType::ANY}});
+			break;
+		case LogicalTypeId::LIST:
+			target_type = LogicalType::LIST(LogicalType::ANY);
+			break;
+		case LogicalTypeId::MAP:
+			target_type = LogicalType::MAP(LogicalType::ANY, LogicalType::ANY);
+			break;
+		case LogicalTypeId::UNION:
+			target_type = LogicalType::UNION({{"any", LogicalType::ANY}});
+			break;
+		case LogicalTypeId::VARCHAR:
+			// We skip this one here as it's handled in json_functions.cpp
+			continue;
+		default:
+			target_type = type;
+		}
+		// Going from JSON to another type has the same cost as going from VARCHAR to that type
+		const auto json_to_target_cost = casts.ImplicitCastCost(LogicalType::VARCHAR, target_type);
+		casts.RegisterCastFunction(JSONCommon::JSONType(), target_type, JSONToAnyCastBind, json_to_target_cost);
+	}
 }
 
 } // namespace duckdb
