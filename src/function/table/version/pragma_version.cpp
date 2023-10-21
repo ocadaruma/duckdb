@@ -3,6 +3,7 @@
 #endif
 #ifndef DUCKDB_SOURCE_ID
 #define DUCKDB_SOURCE_ID "401c8061c6"
+#endif
 #include "duckdb/function/table/system_functions.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/common/string_util.hpp"
